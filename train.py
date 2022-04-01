@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     os.environ[
         'CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # Deterministic behavior of torch.addmm. Please refer to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
-    torch.set_deterministic(True)
+    # torch.set_deterministic(True)
+    torch.use_deterministic_algorithms(True)
     # Initialize the logger
     logging.basicConfig(level=logging.INFO)
 
@@ -39,27 +40,31 @@ def main() -> None:
     # Get args
     parser = HfArgumentParser((WrappedSeq2SeqTrainingArguments,))
     training_args, = parser.parse_args_into_dataclasses()
+    # print(training_args)
+
     set_seed(training_args.seed)
     args = Configure.Get(training_args.cfg)
 
+    
+    
     if 'checkpoint-???' in args.bert.location:
         args.bert.location = get_last_checkpoint(
             os.path.dirname(args.bert.location.model_name_or_path))
         logger.info(f"Resolve model_name_or_path to {args.bert.location.model_name_or_path}")
 
-    if "wandb" in training_args.report_to and training_args.local_rank <= 0:
-        import wandb
+    # if "wandb" in training_args.report_to and training_args.local_rank <= 0:
+    #     import wandb
 
-        init_args = {}
-        if "MLFLOW_EXPERIMENT_ID" in os.environ:
-            init_args["group"] = os.environ["MLFLOW_EXPERIMENT_ID"]
-        wandb.init(
-            project=os.getenv("WANDB_PROJECT", "uni-frame-for-knowledge-tabular-tasks"),
-            name=training_args.run_name,
-            entity=os.getenv("WANDB_ENTITY", 'sgtnew'),
-            **init_args,
-        )
-        wandb.config.update(training_args, allow_val_change=True)
+    #     init_args = {}
+    #     if "MLFLOW_EXPERIMENT_ID" in os.environ:
+    #         init_args["group"] = os.environ["MLFLOW_EXPERIMENT_ID"]
+    #     wandb.init(
+    #         project=os.getenv("WANDB_PROJECT", "uni-frame-for-knowledge-tabular-tasks"),
+    #         name=training_args.run_name,
+    #         entity=os.getenv("WANDB_ENTITY", 'sgtnew'),
+    #         **init_args,
+    #     )
+    #     wandb.config.update(training_args, allow_val_change=True)
 
     # Detect last checkpoint
     last_checkpoint = None

@@ -344,13 +344,14 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         #if self.wandb_run_dir and (
         #        stage.startswith('eval_') and int(self.state.num_train_epochs) == int(float(stage[len('eval_'):]))
         #):
-        if self.args.local_rank <= 0:
-            with open(f"{self.wandb_run_dir}/predictions_{stage}.json", "w") as f:
-                json.dump(
-                    [dict(**{"prediction": predictions[idx]}, **examples[idx]) for idx in range(len(predictions))],
-                    f,
-                    indent=4,
-                )
+        if self.wandb_run_dir:
+            if self.args.local_rank <= 0:
+                with open(f"{self.wandb_run_dir}/predictions_{stage}.json", "w") as f:
+                    json.dump(
+                        [dict(**{"prediction": predictions[idx]}, **examples[idx]) for idx in range(len(predictions))],
+                        f,
+                        indent=4,
+                    )
         return EvalPrediction(predictions=predictions, items=[examples[idx] for idx in range(len(predictions))])
 
     def _compute_metrics(self, eval_prediction: EvalPrediction, section) -> dict:

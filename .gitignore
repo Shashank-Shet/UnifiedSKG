@@ -1,3 +1,9 @@
+# user added files
+.lock
+data/
+output/
+t5-large-baseline/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
