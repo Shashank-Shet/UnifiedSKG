@@ -24,6 +24,8 @@ from transformers.trainer_utils import PredictionOutput, speed_metrics
 from transformers.training_args import ParallelMode
 
 from .training_arguments import WrappedSeq2SeqTrainingArguments
+from ted import compute_ted
+
 
 _is_torch_generator_available = False
 if version.parse(torch.__version__) >= version.parse("1.6"):
