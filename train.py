@@ -9,6 +9,7 @@ from transformers import (
     HfArgumentParser,
     set_seed,
     EarlyStoppingCallback,
+    AutoTokenizer,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from collections import OrderedDict
@@ -45,9 +46,7 @@ def main() -> None:
 
     set_seed(training_args.seed)
     args = Configure.Get(training_args.cfg)
-
-    
-    
+        
     if 'checkpoint-???' in args.bert.location:
         args.bert.location = get_last_checkpoint(
             os.path.dirname(args.bert.location.model_name_or_path))
@@ -114,7 +113,7 @@ def main() -> None:
             task_raw_datasets_split['validation'] = datasets.load_dataset(
                 path=task_args.dataset.loader_path,
                 cache_dir=task_args.dataset.data_store_path,
-                split='validation[:10]'
+                split='validation'
             )
             # task_raw_datasets_split: datasets.DatasetDict = datasets.load_dataset(
             #     path=task_args.dataset.loader_path,
@@ -132,6 +131,11 @@ def main() -> None:
         seq2seq_dataset_split: tuple = utils.tool.get_constructor(args.seq2seq.constructor)(args).\
             to_seq2seq(meta_tuning_data)
 
+    # tokenizer = AutoTokenizer.from_pretrained("hkunlp/from_all_T5_large_prefix_spider_with_cell_value2", use_fast=False)
+    # from models.unified.prefixtuning import Model
+    # model = Model(args)
+    # model.load("hkunlp/from_all_T5_large_prefix_spider_with_cell_value2")
+    
     evaluator = utils.tool.get_evaluator(args.evaluate.tool)(args)
     model = utils.tool.get_model(args.model.name)(args)
     model_tokenizer = model.tokenizer
@@ -168,12 +172,14 @@ def main() -> None:
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         eval_examples=seq2seq_eval_dataset,
-        train_examples=seq2seq_train_dataset,
         wandb_run_dir=wandb.run.dir if "wandb" in training_args.report_to and training_args.local_rank <= 0 else None,
         callbacks=[early_stopping_callback],
     )
+    trainer.train_examples = seq2seq_train_dataset
     print('Trainer build successfully.')
-
+    print(f"Training args train flag: {training_args.do_train}")
+    print(f"Training args eval flag: {training_args.do_eval}")
+    print(f"Training args predict flag: {training_args.do_predict}")
     # Load model weights (for --do_train=False or post finetuning).
     if training_args.load_weights_from:
         state_dict = torch.load(os.path.join(training_args.load_weights_from, transformers.WEIGHTS_NAME), map_location="cpu")
@@ -220,6 +226,7 @@ def main() -> None:
         trainer.save_state()
 
     # Evaluation
+    training_args.do_eval = False
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
 
@@ -238,7 +245,7 @@ def main() -> None:
         print(len(test_dataset))
         predict_results = trainer.predict(
             # test_dataset=test_dataset if test_dataset else eval_dataset,
-            test_dataset=Subset(test_dataset, range(16)) if test_dataset else eval_dataset,
+            test_dataset=Subset(test_dataset, range(1)) if test_dataset else eval_dataset,
             test_examples=seq2seq_test_dataset if seq2seq_test_dataset else seq2seq_eval_dataset,
             metric_key_prefix="predict"
         )

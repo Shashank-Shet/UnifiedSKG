@@ -49,7 +49,6 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
             wandb_run_dir: Optional[str] = None,
             **kwargs,
     ) -> None:
-        self.train_examples = kwargs.pop('train_examples')
         super().__init__(*args, **kwargs)
         self.evaluator = evaluator
         self.eval_examples = eval_examples
@@ -63,16 +62,32 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         index_list = inputs.pop('idx')
         nn_index_list = inputs.pop('nn_index')
         cbr_ted      = inputs.pop('nn_ted')
-        loss, generated_tokens, labels = self.prediction_step(model, inputs, False)
-        train_preds = self._post_process_function(
-            train_examples, generated_tokens)
-
+        gen_kwargs = {
+            "max_length": self.args.generation_max_length,
+            "num_beams": self.args.generation_num_beams,
+            # "max_length": self._max_length if self._max_length is not None else self.model.config.max_length,
+            # "num_beams": self._num_beams if self._num_beams is not None else self.model.config.num_beams,
+            "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
+            "no_repeat_ngram_size": 0,  # FIXME: hard coding the no_repeat_ngram_size
+        }
+        print(gen_kwargs)
+        inputs = self._prepare_inputs(inputs)
+        # with torch.no_grad():
+        generated_tokens = self.model.generate(
+            inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            **gen_kwargs,
+        )
+        if generated_tokens.shape[-1] < gen_kwargs["max_length"]:
+            generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
+        predictions = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+        print(predictions[0])
         for i in range(len(nn_index_list)):
             nn_item = self.train_examples[nn_index_list[i]]
             curr_item = self.train_examples[index_list[i]]
             cbr_question = nn_item['question']
             cbr_query    = nn_item['query']
-            pred = train_preds[i]
+            pred = predictions[i]
             pred_ted = compute_ted(pred_ted, cbr_query)
             # TODO: Code to Filter
             seq_in = "{} ; {} ; {} ; {}".format(cbr_question, cbr_query, curr_item['question'], pred)
@@ -268,11 +283,12 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
             )
         finally:
             self.compute_metrics = compute_metrics
-        print(output.predictions)
+        # print(output.predictions)
 
         eval_preds = self._post_process_function(
             test_examples, output.predictions, metric_key_prefix)
         print(eval_preds)
+        exit(0)
 
         if self.compute_metrics is not None:
 
@@ -323,15 +339,9 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         """
 
         # print("HERE!!!!")
-        index_list = None
-        if inputs.get('idx'):
-            index_list = inputs['idx']
-            inputs.pop('idx')
-        if inputs.get('nn_question'):
-            cbr_question = inputs.pop('nn_question')
-            cbr_query    = inputs.pop('nn_query')
-            cbr_ted      = inputs.pop('nn_ted')
-        # print(index_list)
+        index_list = inputs.pop('idx')
+        nn_index_list = inputs.pop('nn_index')
+        cbr_ted      = inputs.pop('nn_ted')
 
         # if not self.args.predict_with_generate or prediction_loss_only:
         if prediction_loss_only:

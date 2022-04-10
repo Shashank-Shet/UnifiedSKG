@@ -3,6 +3,9 @@
 data/
 output/
 t5-large-baseline/
+t5-large-test/
+*.npy
+*~
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
