@@ -47,12 +47,62 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
             wandb_run_dir: Optional[str] = None,
             **kwargs,
     ) -> None:
+        self.train_examples = kwargs.pop('train_examples')
         super().__init__(*args, **kwargs)
         self.evaluator = evaluator
         self.eval_examples = eval_examples
         self.compute_metrics = self._compute_metrics
         self.ignore_pad_token_for_loss = ignore_pad_token_for_loss
         self.wandb_run_dir = wandb_run_dir
+        self.my_flag_var = True
+
+    def training_step(self, model, inputs):
+        print("HERE")
+        index_list = inputs.pop('idx')
+        nn_index_list = inputs.pop('nn_index')
+        cbr_ted      = inputs.pop('nn_ted')
+        loss, generated_tokens, labels = self.prediction_step(model, inputs, False)
+        train_preds = self._post_process_function(
+            train_examples, generated_tokens)
+
+        for i in range(len(nn_index_list)):
+            nn_item = self.train_examples[nn_index_list[i]]
+            curr_item = self.train_examples[index_list[i]]
+            cbr_question = nn_item['question']
+            cbr_query    = nn_item['query']
+            pred = train_preds[i]
+            pred_ted = compute_ted(pred_ted, cbr_query)
+            # TODO: Code to Filter
+            seq_in = "{} ; {} ; {} ; {}".format(cbr_question, cbr_query, curr_item['question'], pred)
+            tokenized_question_and_schemas = self.tokenizer(
+                seq_in,
+                padding="max_length",
+                truncation=True,
+                max_length=1536,
+                # max_length=self.training_args.input_max_length,
+                # We found that set it as large as possible can boost the performance significantly
+                # , meanwhile, due to the t5 uses a relative position coding, we need to manually
+                # assign the max input length into some large numbers, instead of using the "max_model_length"
+                # ,which the default is 512, which will hurt the performance a lot.
+            )
+            # TODO: Code to Update and Filter
+            inputs[i] = {
+                'input_ids': torch.LongTensor(tokenized_question_and_schemas.data["input_ids"]),
+                'attention_mask': torch.LongTensor(tokenized_question_and_schemas.data["attention_mask"]),
+                'labels': tokenized_inferred_input_ids,
+            }
+        outputs = super().training_step(
+            model, inputs,
+        )
+        return outputs
+
+        # Predict stage:
+        # print(generated_tokens[0], labels[0])
+        # exit(0)
+
+        # inputs['input_ids_cbr'] = cbr_inputs
+        # inputs['attention_mask_cbr'] = cbr_att_masks
+        return outputs
 
     '''def _get_train_sampler(self) -> Optional[torch.utils.data.sampler.Sampler]:
         if not isinstance(self.train_dataset, collections.abc.Sized):
@@ -184,7 +234,7 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         self._memory_tracker.stop_and_update_metrics(output.metrics)
 
         return output.metrics
-
+    
     def predict(
             self,
             test_dataset: Optional[Dataset],
@@ -201,7 +251,6 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
 
         # memory metrics - must set up as early as possible
         self._memory_tracker.start()
-
         test_dataloader = self.get_test_dataloader(test_dataset)
         start_time = time.time()
 
@@ -217,11 +266,17 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
             )
         finally:
             self.compute_metrics = compute_metrics
+        print(output.predictions)
+
+        eval_preds = self._post_process_function(
+            test_examples, output.predictions, metric_key_prefix)
+        print(eval_preds)
 
         if self.compute_metrics is not None:
 
             eval_preds = self._post_process_function(
                 test_examples, output.predictions, metric_key_prefix)
+            print(eval_preds)
             output.metrics.update(self.compute_metrics(eval_preds, section="test"))
 
         output.metrics.update(speed_metrics(metric_key_prefix, start_time, len(test_dataset)))
@@ -265,11 +320,24 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
             labels (each being optional).
         """
 
-        if not self.args.predict_with_generate or prediction_loss_only:
-            return super().prediction_step(
+        # print("HERE!!!!")
+        index_list = None
+        if inputs.get('idx'):
+            index_list = inputs['idx']
+            inputs.pop('idx')
+        if inputs.get('nn_question'):
+            cbr_question = inputs.pop('nn_question')
+            cbr_query    = inputs.pop('nn_query')
+            cbr_ted      = inputs.pop('nn_ted')
+        # print(index_list)
+
+        # if not self.args.predict_with_generate or prediction_loss_only:
+        if prediction_loss_only:
+            outputs = super().prediction_step(
                 model, inputs, prediction_loss_only=prediction_loss_only, ignore_keys=ignore_keys
             )
-
+            # print(outputs[0])
+            return outputs
         has_labels = "labels" in inputs
         inputs = self._prepare_inputs(inputs)
 

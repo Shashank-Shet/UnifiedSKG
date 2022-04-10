@@ -17,6 +17,7 @@ from utils.configue import Configure
 from utils.dataset import TokenizedDataset
 from utils.trainer import EvaluateFriendlySeq2SeqTrainer
 from utils.training_arguments import WrappedSeq2SeqTrainingArguments
+from torch.utils.data import Subset
 
 # Huggingface realized the "Seq2seqTrainingArguments" which is the same with "WrappedSeq2SeqTrainingArguments"
 # in transformers==4.10.1 during our work.
@@ -95,19 +96,37 @@ def main() -> None:
         seq2seq_dataset_split: tuple = utils.tool.get_constructor(args.seq2seq.constructor)(args).to_seq2seq(
             raw_datasets_split, cache_root)
     else:
+        print("HERE!!!!")
         cache_root = os.path.join('output', 'cache')
         os.makedirs(cache_root, exist_ok=True)
         meta_tuning_data = {}
         for task, arg_path in args.arg_paths:
             task_args = Configure.Get(arg_path)
+            # print(task_args)
             task_args.bert = args.bert
             print('task_args.bert.location:', task_args.bert.location)
-            task_raw_datasets_split: datasets.DatasetDict = datasets.load_dataset(
+            task_raw_datasets_split: datasets.DatasetDict = datasets.DatasetDict()
+            task_raw_datasets_split['train'] = datasets.load_dataset(
                 path=task_args.dataset.loader_path,
-                cache_dir=task_args.dataset.data_store_path)
+                cache_dir=task_args.dataset.data_store_path,
+                split='train'
+            )
+            task_raw_datasets_split['validation'] = datasets.load_dataset(
+                path=task_args.dataset.loader_path,
+                cache_dir=task_args.dataset.data_store_path,
+                split='validation[:10]'
+            )
+            # task_raw_datasets_split: datasets.DatasetDict = datasets.load_dataset(
+            #     path=task_args.dataset.loader_path,
+            #     cache_dir=task_args.dataset.data_store_path,
+            #     # split='train+validation[:10]'
+            # )
+            print(task_raw_datasets_split)
+            print(len(task_raw_datasets_split))
+            print(task_args.seq2seq.constructor)
             task_seq2seq_dataset_split: tuple = utils.tool.get_constructor(task_args.seq2seq.constructor)(task_args).\
                 to_seq2seq(task_raw_datasets_split, cache_root)
-
+            # print(task_seq2seq_dataset_split)
             meta_tuning_data[arg_path] = task_seq2seq_dataset_split
 
         seq2seq_dataset_split: tuple = utils.tool.get_constructor(args.seq2seq.constructor)(args).\
@@ -117,6 +136,7 @@ def main() -> None:
     model = utils.tool.get_model(args.model.name)(args)
     model_tokenizer = model.tokenizer
 
+    # print(seq2seq_dataset_split)
     seq2seq_train_dataset, seq2seq_eval_dataset, seq2seq_test_dataset = None, None, None
     if len(seq2seq_dataset_split) == 2:
         seq2seq_train_dataset, seq2seq_eval_dataset = seq2seq_dataset_split
@@ -127,11 +147,14 @@ def main() -> None:
 
     # We wrap the "string" seq2seq data into "tokenized tensor".
     train_dataset = TokenizedDataset(args, training_args, model_tokenizer,
-                                     seq2seq_train_dataset) if seq2seq_train_dataset else None
+                                     seq2seq_train_dataset, train=True) if seq2seq_train_dataset else None
     eval_dataset = TokenizedDataset(args, training_args, model_tokenizer,
-                                    seq2seq_eval_dataset) if seq2seq_eval_dataset else None
+                                    seq2seq_eval_dataset, seq2seq_train_dataset) if seq2seq_eval_dataset else None
     test_dataset = TokenizedDataset(args, training_args, model_tokenizer,
-                                    seq2seq_test_dataset) if seq2seq_test_dataset else None
+                                    seq2seq_test_dataset, seq2seq_train_dataset) if seq2seq_test_dataset else None
+
+    # print(type(train_dataset))
+    # exit(0)
 
     # Initialize our Trainer
     early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=args.seq2seq.patience if args.seq2seq.patience else 5)
@@ -145,6 +168,7 @@ def main() -> None:
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         eval_examples=seq2seq_eval_dataset,
+        train_examples=seq2seq_train_dataset,
         wandb_run_dir=wandb.run.dir if "wandb" in training_args.report_to and training_args.local_rank <= 0 else None,
         callbacks=[early_stopping_callback],
     )
@@ -211,8 +235,10 @@ def main() -> None:
     if training_args.do_predict:
         logger.info("*** Predict ***")
 
+        print(len(test_dataset))
         predict_results = trainer.predict(
-            test_dataset=test_dataset if test_dataset else eval_dataset,
+            # test_dataset=test_dataset if test_dataset else eval_dataset,
+            test_dataset=Subset(test_dataset, range(16)) if test_dataset else eval_dataset,
             test_examples=seq2seq_test_dataset if seq2seq_test_dataset else seq2seq_eval_dataset,
             metric_key_prefix="predict"
         )
