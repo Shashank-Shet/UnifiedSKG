@@ -69,16 +69,21 @@ def parse_data(data):
 
 
 def compute_ted(x, y):
-    print(parse_data([x, y]))
-    d_i, d_j = parse_data([x, y])
+    try:
+        d_i, d_j = parse_data([x, y])
+    except Exception as e:
+        return 10000, 10000
     tree_obj_i, size_i, _, _ = d_i
     if tree_obj_i is None:
         tgt_sizes[i] = 1e-6
-        return
+        return 10000, 10000
     tree_obj_j, size_j, _, _ = d_j
     if tree_obj_j is None:
-        return
-    dist = APTED(tree_obj_i, tree_obj_j, config).compute_edit_distance()
+        return 10000, 10000
+    try:
+        dist = APTED(tree_obj_i, tree_obj_j, config).compute_edit_distance()
+    except Exception as e:
+        return 10000, 10000
     assert dist >= 0
     normalized = dist / max(size_j, size_i)
     return dist, normalized

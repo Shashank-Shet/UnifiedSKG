@@ -98,10 +98,13 @@ class TokenizedDataset(Dataset):
         )
 
         db_id = raw_item['db_id']
-        nn_list = self.db_dict[db_id]
-        nn_list_index = self.CBR_MAT[index][nn_list].argmin()
-        nn_ted = self.CBR_MAT[index][nn_list].argmin()
-        nn_index = self.db_dict[db_id][nn_list_index]
+        if self.db_dict.get(db_id) is not None:  # During training, no issues
+            nn_list = self.db_dict[db_id]
+            nn_list_index = self.CBR_MAT[index][nn_list].argmin()
+            nn_index = self.db_dict[db_id][nn_list_index]
+        else:                                    # During eval, db_id may not be available
+            nn_index = self.CBR_MAT[index].argmin()
+        nn_ted = self.CBR_MAT[index][nn_index].argmin()
         # nn_item = self.train_dataset[nn_index]
         # nn_question = nn_item['question']
         # nn_query    = nn_item['query']

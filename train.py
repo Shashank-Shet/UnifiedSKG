@@ -23,6 +23,7 @@ from torch.utils.data import Subset
 # Huggingface realized the "Seq2seqTrainingArguments" which is the same with "WrappedSeq2SeqTrainingArguments"
 # in transformers==4.10.1 during our work.
 logger = logging.getLogger(__name__)
+os.environ["WANDB_DISABLED"] = "true"
 
 
 def main() -> None:
@@ -131,14 +132,18 @@ def main() -> None:
         seq2seq_dataset_split: tuple = utils.tool.get_constructor(args.seq2seq.constructor)(args).\
             to_seq2seq(meta_tuning_data)
 
-    # tokenizer = AutoTokenizer.from_pretrained("hkunlp/from_all_T5_large_prefix_spider_with_cell_value2", use_fast=False)
-    # from models.unified.prefixtuning import Model
-    # model = Model(args)
+    ckpt_path = "./t5-large-test/test-ckpt"
+    # model_tokenizer = AutoTokenizer.from_pretrained("hkunlp/from_all_T5_large_prefix_spider_with_cell_value2", use_fast=False)
+    model_tokenizer = AutoTokenizer.from_pretrained(ckpt_path, local_files_only=True, use_fast=False)
+    from models.unified.prefixtuning import Model
+    model = Model(args)
     # model.load("hkunlp/from_all_T5_large_prefix_spider_with_cell_value2")
-    
+    model.load(ckpt_path)
     evaluator = utils.tool.get_evaluator(args.evaluate.tool)(args)
-    model = utils.tool.get_model(args.model.name)(args)
-    model_tokenizer = model.tokenizer
+    
+    # evaluator = utils.tool.get_evaluator(args.evaluate.tool)(args)
+    # model = utils.tool.get_model(args.model.name)(args)
+    # model_tokenizer = model.tokenizer
 
     # print(seq2seq_dataset_split)
     seq2seq_train_dataset, seq2seq_eval_dataset, seq2seq_test_dataset = None, None, None
@@ -172,7 +177,8 @@ def main() -> None:
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         eval_examples=seq2seq_eval_dataset,
-        wandb_run_dir=wandb.run.dir if "wandb" in training_args.report_to and training_args.local_rank <= 0 else None,
+        # wandb_run_dir=wandb.run.dir if "wandb" in training_args.report_to and training_args.local_rank <= 0 else None,
+        wandb_run_dir=None,
         callbacks=[early_stopping_callback],
     )
     trainer.train_examples = seq2seq_train_dataset
@@ -244,8 +250,8 @@ def main() -> None:
 
         print(len(test_dataset))
         predict_results = trainer.predict(
-            # test_dataset=test_dataset if test_dataset else eval_dataset,
-            test_dataset=Subset(test_dataset, range(1)) if test_dataset else eval_dataset,
+            test_dataset=test_dataset if test_dataset else eval_dataset,
+            # test_dataset=Subset(test_dataset, range(1)) if test_dataset else eval_dataset,
             test_examples=seq2seq_test_dataset if seq2seq_test_dataset else seq2seq_eval_dataset,
             metric_key_prefix="predict"
         )

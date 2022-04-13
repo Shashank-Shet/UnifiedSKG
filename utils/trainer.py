@@ -1,8 +1,10 @@
+import os
 import collections
 import json
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 from typing import NamedTuple
+from colored import attr, fg
 
 import datasets
 import numpy as np
@@ -25,7 +27,6 @@ from transformers.training_args import ParallelMode
 
 from .training_arguments import WrappedSeq2SeqTrainingArguments
 from ted import compute_ted
-
 
 _is_torch_generator_available = False
 if version.parse(torch.__version__) >= version.parse("1.6"):
@@ -58,68 +59,58 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         self.my_flag_var = True
 
     def training_step(self, model, inputs):
-        print("HERE")
         index_list = inputs.pop('idx')
         nn_index_list = inputs.pop('nn_index')
-        cbr_ted      = inputs.pop('nn_ted')
+        cbr_ted       = inputs.pop('nn_ted')
         gen_kwargs = {
             "max_length": self.args.generation_max_length,
             "num_beams": self.args.generation_num_beams,
-            # "max_length": self._max_length if self._max_length is not None else self.model.config.max_length,
-            # "num_beams": self._num_beams if self._num_beams is not None else self.model.config.num_beams,
             "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
             "no_repeat_ngram_size": 0,  # FIXME: hard coding the no_repeat_ngram_size
         }
-        print(gen_kwargs)
         inputs = self._prepare_inputs(inputs)
-        # with torch.no_grad():
-        generated_tokens = self.model.generate(
-            inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            **gen_kwargs,
-        )
-        if generated_tokens.shape[-1] < gen_kwargs["max_length"]:
-            generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
-        predictions = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-        print(predictions[0])
+        with torch.no_grad():
+            generated_tokens = self.model.generate(
+                inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                **gen_kwargs,
+            )
+            if generated_tokens.shape[-1] < gen_kwargs["max_length"]:
+                generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
+            predictions = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
         for i in range(len(nn_index_list)):
             nn_item = self.train_examples[nn_index_list[i]]
             curr_item = self.train_examples[index_list[i]]
+            schema = curr_item['serialized_schema']
             cbr_question = nn_item['question']
             cbr_query    = nn_item['query']
+            print(fg('blue') + attr(1) + curr_item['query'] + attr(0))
+            print(fg('blue') + attr(1) + cbr_query + attr(0))
+            exit(0)
             pred = predictions[i]
-            pred_ted = compute_ted(pred_ted, cbr_query)
+            pred_ted, _ = compute_ted(pred, cbr_query)
+            if cbr_ted[i] <= 3 and pred_ted >= 5 and np.random.rand() >= 0.4:
             # TODO: Code to Filter
-            seq_in = "{} ; {} ; {} ; {}".format(cbr_question, cbr_query, curr_item['question'], pred)
-            tokenized_question_and_schemas = self.tokenizer(
-                seq_in,
-                padding="max_length",
-                truncation=True,
-                max_length=1536,
-                # max_length=self.training_args.input_max_length,
-                # We found that set it as large as possible can boost the performance significantly
-                # , meanwhile, due to the t5 uses a relative position coding, we need to manually
-                # assign the max input length into some large numbers, instead of using the "max_model_length"
-                # ,which the default is 512, which will hurt the performance a lot.
-            )
-            # TODO: Code to Update and Filter
-            inputs[i] = {
-                'input_ids': torch.LongTensor(tokenized_question_and_schemas.data["input_ids"]),
-                'attention_mask': torch.LongTensor(tokenized_question_and_schemas.data["attention_mask"]),
-                'labels': tokenized_inferred_input_ids,
-            }
+                seq_in = "{} ; {} ; structured knowledge: {} ; cbr: {} ; {}".format(curr_item['question'], pred, schema, cbr_question, cbr_query)
+                tokenized_question_and_schemas = self.tokenizer(
+                    seq_in,
+                    padding="max_length",
+                    truncation=True,
+                    max_length=1536,
+                    # max_length=self.training_args.input_max_length,
+                    # We found that set it as large as possible can boost the performance significantly
+                    # , meanwhile, due to the t5 uses a relative position coding, we need to manually
+                    # assign the max input length into some large numbers, instead of using the "max_model_length"
+                    # ,which the default is 512, which will hurt the performance a lot.
+                )
+                inputs['input_ids'][i] = torch.LongTensor(tokenized_question_and_schemas.data["input_ids"])
+                inputs['attention_mask'][i] = torch.LongTensor(tokenized_question_and_schemas.data["attention_mask"])
+        inputs = self._prepare_inputs(inputs)
         outputs = super().training_step(
             model, inputs,
         )
         return outputs
 
-        # Predict stage:
-        # print(generated_tokens[0], labels[0])
-        # exit(0)
-
-        # inputs['input_ids_cbr'] = cbr_inputs
-        # inputs['attention_mask_cbr'] = cbr_att_masks
-        return outputs
 
     '''def _get_train_sampler(self) -> Optional[torch.utils.data.sampler.Sampler]:
         if not isinstance(self.train_dataset, collections.abc.Sized):
@@ -209,7 +200,16 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         eval_examples = self.eval_examples if eval_examples is None else eval_examples
         start_time = time.time()
 
-        # print([eval_examples[idx]['arg_path'] for idx in range(len(eval_examples))])
+        # # print([eval_examples[idx]['arg_path'] for idx in range(len(eval_examples))])
+        # output = self.evaluation_loop(
+        #     eval_dataloader,
+        #     description="Evaluation",
+        #     # No point gathering the predictions if there are no metrics, otherwise we defer to
+        #     # self.args.prediction_loss_only
+        #     prediction_loss_only=False,
+        #     ignore_keys=ignore_keys,
+        #     metric_key_prefix=metric_key_prefix,
+        # )
 
         # Temporarily disable metric computation, we will do it in the loop here.
         compute_metrics = self.compute_metrics
@@ -283,18 +283,15 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
             )
         finally:
             self.compute_metrics = compute_metrics
-        # print(output.predictions)
+        # # print(output.predictions)
 
         eval_preds = self._post_process_function(
             test_examples, output.predictions, metric_key_prefix)
-        print(eval_preds)
-        exit(0)
+        # print(eval_preds)
 
         if self.compute_metrics is not None:
-
-            eval_preds = self._post_process_function(
-                test_examples, output.predictions, metric_key_prefix)
-            print(eval_preds)
+            # eval_preds = self._post_process_function(
+            #     test_examples, output.predictions, metric_key_prefix)
             output.metrics.update(self.compute_metrics(eval_preds, section="test"))
 
         output.metrics.update(speed_metrics(metric_key_prefix, start_time, len(test_dataset)))
@@ -339,12 +336,55 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         """
 
         # print("HERE!!!!")
-        index_list = inputs.pop('idx')
+        index_list    = inputs.pop('idx')
         nn_index_list = inputs.pop('nn_index')
-        cbr_ted      = inputs.pop('nn_ted')
+        cbr_ted       = inputs.pop('nn_ted')
 
+        ##################### First round of preds ##############################
+        gen_kwargs = {
+            "max_length": self.args.generation_max_length,
+            "num_beams": self.args.generation_num_beams,
+            "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
+            "no_repeat_ngram_size": 0,  # FIXME: hard coding the no_repeat_ngram_size
+        }
+        inputs = self._prepare_inputs(inputs)
+        with torch.no_grad():
+            generated_tokens = self.model.generate(
+                inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                **gen_kwargs,
+            )
+            if generated_tokens.shape[-1] < gen_kwargs["max_length"]:
+                generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
+            predictions = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+        for i in range(len(nn_index_list)):
+            nn_item = self.train_examples[nn_index_list[i]]
+            curr_item = self.train_examples[index_list[i]]
+            schema = curr_item['serialized_schema']
+            cbr_question = nn_item['question']
+            cbr_query    = nn_item['query']
+            pred = predictions[i]
+            pred_ted, _ = compute_ted(pred, cbr_query)
+            if cbr_ted[i] <= 3 and pred_ted >= 5:
+            # TODO: Code to Filter
+                seq_in = "{} ; {} ; structured knowledge: {} ; cbr: {} ; {}".format(curr_item['question'], pred, schema, cbr_question, cbr_query)
+                tokenized_question_and_schemas = self.tokenizer(
+                    seq_in,
+                    padding="max_length",
+                    truncation=True,
+                    max_length=1536,
+                    # max_length=self.training_args.input_max_length,
+                    # We found that set it as large as possible can boost the performance significantly
+                    # , meanwhile, due to the t5 uses a relative position coding, we need to manually
+                    # assign the max input length into some large numbers, instead of using the "max_model_length"
+                    # ,which the default is 512, which will hurt the performance a lot.
+                )
+                inputs['input_ids'][i] = torch.LongTensor(tokenized_question_and_schemas.data["input_ids"])
+                inputs['attention_mask'][i] = torch.LongTensor(tokenized_question_and_schemas.data["attention_mask"])
+
+        ############################ Inputs ready for refinement ######################################
         # if not self.args.predict_with_generate or prediction_loss_only:
-        if prediction_loss_only:
+        if not self.args.predict_with_generate or prediction_loss_only:
             outputs = super().prediction_step(
                 model, inputs, prediction_loss_only=prediction_loss_only, ignore_keys=ignore_keys
             )
@@ -354,12 +394,12 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         inputs = self._prepare_inputs(inputs)
 
         # XXX: adapt synced_gpus for fairscale as well
-        gen_kwargs = {
-            "max_length": self._max_length if self._max_length is not None else self.model.config.max_length,
-            "num_beams": self._num_beams if self._num_beams is not None else self.model.config.num_beams,
-            "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
-            "no_repeat_ngram_size": 0,  # FIXME: hard coding the no_repeat_ngram_size
-        }
+        # gen_kwargs = {
+        #     "max_length": self._max_length if self._max_length is not None else self.model.config.max_length,
+        #     "num_beams": self._num_beams if self._num_beams is not None else self.model.config.num_beams,
+        #     "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
+        #     "no_repeat_ngram_size": 0,  # FIXME: hard coding the no_repeat_ngram_size
+        # }
 
         if "description_input_ids" in inputs:
             gen_kwargs["description_input_ids"] = inputs["description_input_ids"]
@@ -412,8 +452,13 @@ class EvaluateFriendlySeq2SeqTrainer(transformers.trainer_seq2seq.Seq2SeqTrainer
         predictions = self.tokenizer.batch_decode(predictions, skip_special_tokens=True)
 
         # Save locally.
-        if self.args.local_rank <= 0:
-            with open(f"{self.args.output_dir}/predictions_{stage}.json", "w") as f:
+        # if self.args.local_rank <= 0:
+        if True:
+            preds_filename = f"{self.args.output_dir}/predictions_{stage}.json"
+            print(f"Dumping output to {preds_filename}")
+            with open(preds_filename, "w") as f:
+                # data = [dict(**{"prediction": predictions[idx]}, **examples[idx]) for idx in range(len(predictions))]
+                # print(data)
                 json.dump(
                     [dict(**{"prediction": predictions[idx]}, **examples[idx]) for idx in range(len(predictions))],
                     f,
